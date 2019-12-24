@@ -1,5 +1,18 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
+#![warn(
+	clippy::all,
+	// clippy::restriction,
+	clippy::pedantic,
+	clippy::nursery,
+	clippy::cargo
+)]
+
+// This is an RLS issue with lib/main crates and this is the workaround
+// https://github.com/rust-lang/rls-vscode/issues/686
+mod lib;
+
+use lib::*;
+// ecs dee
+
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -18,6 +31,22 @@ impl Debug for Node {
 	}
 }
 
+impl Vertex2D for Node {
+	fn coords(&self) -> (f64, f64) {
+		(self.x as f64, self.y as f64)
+	}
+}
+
+impl Node {
+	const fn new(x: usize, y: usize) -> Self {
+		Self {
+			x,
+			y,
+			is_wall: false,
+		}
+	}
+}
+
 struct D2Q9 {
 	grid: Vec<Vec<Node>>,
 }
@@ -33,16 +62,6 @@ impl DerefMut for D2Q9 {
 	fn deref_mut(&mut self) -> &mut Self::Target {
 		DerefMut::deref_mut(&mut self.grid)
 	}
-}
-
-fn h(p0: &Node, p: &Node) -> f64 {
-	(p.x as f64 - p0.x as f64)
-		.abs()
-		.max((p.y as f64 - p0.y as f64).abs())
-}
-
-fn d(p: &Node, p0: &Node) -> f64 {
-	((p.x as f64 - p0.x as f64).powf(2.0) + (p.y as f64 - p0.y as f64).powf(2.0)).sqrt()
 }
 
 impl D2Q9 {
@@ -68,7 +87,12 @@ impl D2Q9 {
 	fn get_at(&self, x: usize, y: usize) -> Option<&Node> {
 		self.get(y).map(|row| row.get(x)).flatten()
 	}
+}
 
+impl Graph2D<Node> for D2Q9 {
+	fn has_vertex(&self, node: &Node) -> bool {
+		self.get_at(node.x, node.y).is_some()
+	}
 	fn neighbors(&self, from: &Node) -> Vec<&Node> {
 		macro_rules! resolve_or_continue {
 			($axis:expr => $delta:ident) => {
@@ -104,7 +128,7 @@ impl D2Q9 {
 	}
 
 	#[allow(clippy::float_cmp)]
-	fn is_transversable(&self, from: &Node, to: &Node) -> bool {
+	fn path_is_transversable(&self, from: &Node, to: &Node) -> bool {
 		if from == to {
 			return true;
 		}
@@ -121,7 +145,7 @@ impl D2Q9 {
 				== self
 					.get_at(from.x, (from.y as f64 + dist_y) as usize)
 					.map(|node| node.is_wall)
-				&& Some(false)
+				|| Some(false)
 					== self
 						.get_at((from.x as f64 + dist_x) as usize, from.y)
 						.map(|node| node.is_wall);
@@ -129,95 +153,50 @@ impl D2Q9 {
 		false
 	}
 
-	fn path(&self, from: (usize, usize), to: (usize, usize)) -> Vec<Node> {
-		const INF: f64 = std::f64::INFINITY;
-		let from = Node {
-			x: from.0,
-			y: from.1,
-			is_wall: false,
-		};
-		let to = Node {
-			x: to.0,
-			y: to.1,
-			is_wall: false,
-		};
-		let min_nodes = from.x.max(to.x) - from.x.min(to.x);
-		let mut path = Vec::new();
-		let mut open_list = HashSet::<&Node>::new();
-		open_list.insert(&from);
-		let mut nodes = HashMap::<&Node, &Node>::with_capacity(min_nodes);
-		let mut g_score = HashMap::<&Node, f64>::with_capacity(min_nodes);
-		g_score.insert(&from, 0.0);
-		let mut f_score = HashMap::<&Node, f64>::with_capacity(min_nodes);
-		f_score.insert(&from, h(&from, &to));
-		while !open_list.is_empty() {
-			let mut list = open_list.iter();
-			let cmp_node = list.next().unwrap();
-			let cur_node = list.fold(*cmp_node, |acc, node| {
-				let f_acc = *f_score.entry(&acc).or_insert(INF);
-				let f_node = *f_score.entry(node).or_insert(INF);
-				if f_acc < f_node {
-					acc
-				} else {
-					*node
-				}
-			});
-			open_list.remove(cur_node);
-			for neighbor in self.neighbors(cur_node).iter() {
-				if !self.is_transversable(cur_node, neighbor) {
-					continue;
-				} else if **neighbor == to {
-					let mut node = cur_node;
-					path.push(node.clone());
-					while nodes.contains_key(node) {
-						node = nodes[node];
-						path.push(node.clone());
-					}
-					path.reverse();
-					path.push((*neighbor).clone());
-					return path;
-				}
-				let new_g = *g_score.entry(&cur_node).or_insert(INF) + d(&cur_node, neighbor);
-				let new_h = h(neighbor, &to);
-				let new_f = new_g + new_h;
-				let f_neighbor = f_score.entry(neighbor).or_insert(INF);
-				if *f_neighbor > new_f {
-					*f_neighbor = new_f;
-					*g_score.entry(neighbor).or_insert(INF) = new_g;
-					*nodes.entry(neighbor).or_insert(&cur_node) = &cur_node;
-					open_list.insert(neighbor);
-				}
-			}
-		}
-		path
+	fn heuristic(&self, node: &Node, other: &Node) -> f64 {
+		node.chebyshev_distance(other)
 	}
 
-	fn path_and_show(&self, from: (usize, usize), to: (usize, usize)) -> Vec<Node> {
-		let path = self.path(from, to);
+	fn travel_cost(&self, node: &Node, other: &Node) -> f64 {
+		node.euclidean_distance(other)
+	}
+}
+
+impl D2Q9 {
+	fn path_and_show<'p>(&'p self, from: &'p Node, to: &'p Node) -> Option<Vec<&'p Node>> {
+		let path = a_star(self, from, to)?;
 		for row in self.iter() {
 			for node in row.iter() {
-				if node.x == from.0 && node.y == from.1 {
+				if node.x == from.x && node.y == from.y {
 					print!("S")
-				} else if node.x == to.0 && node.y == to.1 {
+				} else if node.x == to.x && node.y == to.y {
 					print!("E")
 				} else if node.is_wall {
 					print!("O");
-				} else if path.contains(node) {
+				} else if path.contains(&node) {
 					print!("#");
+				// } else if visited.contains(node) {
+				// print!(".");
 				} else {
-					print!(".");
+					print!(" ");
 				}
 			}
 			println!();
 		}
-		path
+		Some(path)
 	}
 }
 
 fn main() {
-	let grid = D2Q9::new(100, 20, |x, y| {
-		(x % 10 == 3 && y > 5) || (x % 10 == 8 && y < 15)
-		// x / 5 == y && y < 15
+	let grid = D2Q9::new(50, 20, |x, y| {
+		// (x % 10 == 3 && y > 5) || (x % 10 == 8 && y < 15)
+		// x < 48 && x / 5 == y && y < 15
+		(x == 5 && y >= 3 && y <= 5)
+			|| (x == 30 && y >= 5 && y <= 10)
+			|| (x == 35 && y <= 10 && y >= 3)
+			|| (y == 3 && x >= 5 && x <= 35)
+			|| (y == 5 && x >= 5 && x <= 30)
+			|| (y == 10 && x >= 30 && x <= 35)
 	});
-	grid.path_and_show((0, 0), (80, 7));
+	grid.path_and_show(&Node::new(0, 19), &Node::new(37, 1));
 }

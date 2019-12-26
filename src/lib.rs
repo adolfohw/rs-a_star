@@ -97,7 +97,6 @@ impl<N> Default for NodeInfo<N> {
 ///
 /// There is no inherit global guarantee of speed or perfectness, these are
 /// highly dependent on the `g` and `h` of choice.
-///
 /// If no path is found between the start and finish points, `None` is returned.
 pub fn a_star<'m, G, V>(map: &'m G, start: &'m V, goal: &'m V) -> Option<Vec<&'m V>>
 where
@@ -111,9 +110,15 @@ where
 	let dx = (goal_x - start_x).abs().max(1.0);
 	let dy = (goal_y - start_y).abs().max(1.0);
 	let area = dx * dy;
+	let perimeter = 2.0 * (dx + dy);
 	let estimated_visits = if area.is_normal() { area as usize } else { 0 };
+	let estimated_analysis = if perimeter.is_normal() {
+		perimeter as usize
+	} else {
+		0
+	};
 	let mut path = Vec::new();
-	let mut open_list = HashSet::<&V>::new();
+	let mut open_list = HashSet::<&V>::with_capacity(estimated_analysis);
 	open_list.insert(start);
 	let mut node_info = HashMap::<&V, NodeInfo<&V>>::with_capacity(estimated_visits);
 	// The start node has a zero cost to move to, and given f = g + h,
@@ -181,9 +186,10 @@ where
 		None
 	} else {
 		// println!(
-		// 	"{} {} {}",
+		// 	"{} {} / {} {}",
 		// 	estimated_visits,
 		// 	node_info.len(),
+		// 	estimated_analysis,
 		// 	open_list.capacity()
 		// );
 		Some(path)
